@@ -22,6 +22,11 @@ try:
 except ImportError:
     HAS_TORNADO_SUPPORT = False
 
+    try:
+        HAS_ASYNC_SUPPORT = True
+    except:
+        HAS_ASYNC_SUPPORT = False
+
 try:
     from redis.exceptions import RedisError
     HAS_REDIS_SUPPORT = True
@@ -221,6 +226,16 @@ class CircuitBreaker(object):
                 raise gen.Return(ret)
         return wrapped()
 
+    async def call_async_await(self, func, *args, **kwargs):
+        """
+        Calls async `func` with the given `args` and `kwargs` according to the rules
+        implemented by the current state of this circuit breaker.
+
+        Return a closure to prevent import errors when using without tornado present
+        """
+        with self._lock:
+            return await self.state.call_async_await(func, *args, **kwargs)
+
     def open(self):
         """
         Opens the circuit, e.g., the following calls will immediately fail
@@ -254,6 +269,7 @@ class CircuitBreaker(object):
         which will will call `func` as a Tornado co-routine.
         """
         call_async = call_kwargs.pop('__pybreaker_call_async', False)
+        call_async_await = call_kwargs.pop('__pybreaker_call_async_await', False)
 
         if call_async and not HAS_TORNADO_SUPPORT:
             raise ImportError('No module named tornado')
@@ -265,6 +281,17 @@ class CircuitBreaker(object):
                     return self.call_async(func, *args, **kwargs)
                 return self.call(func, *args, **kwargs)
             return _inner_wrapper
+
+        def _outer_wrapper_async(func):
+            @wraps(func)
+            async def _inner_wrapper_async(*args, **kwargs):
+                return await self.call_async_await(func, *args, **kwargs)
+            return _inner_wrapper_async
+
+        if call_async_await:
+            if call_args:
+                _outer_wrapper_async(*call_args)
+            return _outer_wrapper_async()
 
         if call_args:
             return _outer_wrapper(*call_args)
@@ -708,6 +735,30 @@ class CircuitBreakerState(object):
                 self._handle_success()
             raise gen.Return(ret)
         return wrapped()
+
+    async def call_async_await(self, func, *args, **kwargs):
+        """
+        Calls async `func` with the given `args` and `kwargs`, and updates the
+        circuit breaker state according to the result.
+
+        Return a closure to prevent import errors when using without tornado present
+        """
+        ret = None
+
+        self.before_call(func, *args, **kwargs)
+        for listener in self._breaker.listeners:
+            listener.before_call(self._breaker, func, *args, **kwargs)
+
+        try:
+            ret = await func(*args, **kwargs)
+            if isinstance(ret, types.GeneratorType):
+                raise gen.Return(self.generator_call(ret))
+
+        except BaseException as e:
+            self._handle_error(e)
+        else:
+            self._handle_success()
+        return ret
 
     def generator_call(self, wrapped_generator):
         try:
