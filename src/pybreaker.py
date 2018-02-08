@@ -291,7 +291,7 @@ class CircuitBreaker(object):
         if call_async_await:
             if call_args:
                 _outer_wrapper_async(*call_args)
-            return _outer_wrapper_async()
+            return _outer_wrapper_async
 
         if call_args:
             return _outer_wrapper(*call_args)
