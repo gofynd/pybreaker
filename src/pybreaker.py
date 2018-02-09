@@ -55,7 +55,8 @@ class CircuitBreaker(object):
     """
 
     def __init__(self, fail_max=5, reset_timeout=60, exclude=None,
-                 listeners=None, state_storage=None, name=None):
+                 listeners=None, state_storage=None, name=None,
+                 fallback_method=None):
         """
         Creates a new circuit breaker with the given parameters.
         """
@@ -69,6 +70,22 @@ class CircuitBreaker(object):
         self._excluded_exceptions = list(exclude or [])
         self._listeners = list(listeners or [])
         self._name = name
+        self._fallback_method = fallback_method
+
+    @property
+    def fallback_method(self):
+        """
+        Return the current fallback method
+        """
+        return self._fallback_method
+
+    @fallback_method.setter
+    def fallback_method(self, func):
+        """
+        Sets the fallback function that will be called when the circuit is open
+        :param func:
+        """
+        self._fallback_method = func
 
     @property
     def fail_counter(self):
@@ -209,8 +226,17 @@ class CircuitBreaker(object):
         Calls `func` with the given `args` and `kwargs` according to the rules
         implemented by the current state of this circuit breaker.
         """
+
         with self._lock:
-            return self.state.call(func, *args, **kwargs)
+            try:
+                result = self.state.call(func, *args, **kwargs)
+            except CircuitBreakerError as e:
+                if self.fallback_method:
+                    result = self.fallback_method(*args, **kwargs)
+                else:
+                    raise e
+
+            return result
 
     def call_async(self, func, *args, **kwargs):
         """
@@ -224,7 +250,21 @@ class CircuitBreaker(object):
             with self._lock:
                 ret = yield self.state.call_async(func, *args, **kwargs)
                 raise gen.Return(ret)
-        return wrapped()
+
+        @gen.coroutine
+        def fallback_wrapped():
+            with self._lock:
+                ret = yield self.fallback_method(*args, **kwargs)
+                raise gen.Return(ret)
+        try:
+            result = wrapped()
+        except CircuitBreakerError as e:
+            if self.fallback_method:
+                result = fallback_wrapped()
+            else:
+                raise e
+
+        return result
 
     async def call_async_await(self, func, *args, **kwargs):
         """
@@ -234,7 +274,15 @@ class CircuitBreaker(object):
         Return a closure to prevent import errors when using without tornado present
         """
         with self._lock:
-            return await self.state.call_async_await(func, *args, **kwargs)
+            try:
+                result = await self.state.call_async_await(func, *args, **kwargs)
+            except CircuitBreakerError as e:
+                if self.fallback_method:
+                    result = await self.fallback_method(*args, **kwargs)
+                else:
+                    raise e
+
+            return result
 
     def open(self):
         """
@@ -270,6 +318,7 @@ class CircuitBreaker(object):
         """
         call_async = call_kwargs.pop('__pybreaker_call_async', False)
         call_async_await = call_kwargs.pop('__pybreaker_call_async_await', False)
+        self.fallback_method(call_kwargs.pop('__pybreaker_fallback', None))
 
         if call_async and not HAS_TORNADO_SUPPORT:
             raise ImportError('No module named tornado')
