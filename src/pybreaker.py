@@ -318,7 +318,7 @@ class CircuitBreaker(object):
         """
         call_async = call_kwargs.pop('__pybreaker_call_async', False)
         call_async_await = call_kwargs.pop('__pybreaker_call_async_await', False)
-        self.fallback_method(call_kwargs.pop('__pybreaker_fallback', None))
+        self.fallback_method = call_kwargs.pop('__pybreaker_fallback', None)
 
         if call_async and not HAS_TORNADO_SUPPORT:
             raise ImportError('No module named tornado')
