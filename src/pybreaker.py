@@ -528,7 +528,7 @@ class CircuitRedisStorage(CircuitBreakerStorage):
         Returns the current circuit breaker state.
         """
         try:
-            return self._redis.get(self._namespace('state')).decode('utf-8')
+            return self._redis.get(self._namespace('state'))
         except self.RedisError:
             self.logger.error('RedisError: falling back to default circuit state', exc_info=True)
             return self._fallback_circuit_state
